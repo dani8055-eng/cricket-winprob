@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Raw ball-by-ball JSON is large — document how to get it instead of committing it
+data/raw/
