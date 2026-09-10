@@ -1,0 +1,5 @@
+coin 0.500
+rule 0.616
+model_acc 0.697
+auc 0.763
+brier 0.198

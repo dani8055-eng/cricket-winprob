@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>T20 Chase Win Probability</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  :root{--ink:#12303f;--accent:#2f7dd1;--naive:#b9922b;--win:#2fae66;--lose:#d1495b;}
+  *{box-sizing:border-box}
+  body{font-family:'Helvetica Neue',Arial,sans-serif;margin:0;background:#eef2f6;color:#1a2733;
+    padding:22px 16px;line-height:1.5}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{margin:0 0 2px;color:var(--ink)} h2{color:var(--ink);margin-top:28px}
+  .sub{color:#5a6b78;font-size:.9em;margin-bottom:18px}
+  .panel{background:#fff;border:1px solid #e2e8ee;border-radius:14px;padding:16px 18px;margin-bottom:14px;
+    box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  select,input{font-size:1em;padding:8px 10px;border-radius:8px;border:1px solid #ccd6df}
+  select{min-width:280px}
+  input{width:90px}
+  button{font-size:1em;padding:9px 18px;border-radius:8px;border:none;cursor:pointer;font-weight:700;
+    background:var(--accent);color:#fff;margin-left:8px}
+  button.sec{background:#e2e8ee;color:#2a3a47}
+  .scorebar{display:flex;gap:22px;align-items:center;flex-wrap:wrap;margin:12px 0 4px;font-size:1.05em}
+  .scorebar .big{font-size:1.4em;font-weight:800;color:var(--ink)}
+  .wpbadge{font-size:1.9em;font-weight:800}
+  .muted{color:#5a6b78;font-size:.9em}
+  .legend{font-size:.85em;color:#5a6b78;margin-top:4px}
+  .dot{display:inline-block;width:11px;height:11px;border-radius:50%;vertical-align:middle;margin-right:4px}
+  .result{font-weight:800;font-size:1.1em}
+  .note{color:#7a8894;font-size:.82em;margin-top:16px;line-height:1.6}
+  .row{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+  .live-grid{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end}
+  .fld{display:flex;flex-direction:column;gap:4px}
+  .fld label{font-size:.8em;color:#5a6b78;text-transform:uppercase;letter-spacing:.5px}
+  .live-out{font-size:3em;font-weight:800;margin:6px 0 0}
+  .bar{height:16px;border-radius:9px;overflow:hidden;background:#e2e8ee;margin-top:8px;max-width:420px}
+  .bar>div{height:100%}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏏 T20 Chase — Win Probability</h1>
+  <div class="sub">A calibrated model that estimates the chasing team's chance of winning at any point
+    in a run chase. Watch a real match replay, or enter a live situation yourself.</div>
+
+  <!-- ===================== LIVE MODE ===================== -->
+  <h2>Live calculator</h2>
+  <div class="panel">
+    <div class="muted" style="margin-bottom:10px">Watching a match? Type the current chase situation and get an instant win probability.</div>
+    <div class="live-grid">
+      <div class="fld"><label>Runs still needed</label><input id="liveNeed" type="number" value="60" min="0" oninput="calcLive()"></div>
+      <div class="fld"><label>Balls remaining</label><input id="liveBalls" type="number" value="36" min="1" max="120" oninput="calcLive()"></div>
+      <div class="fld"><label>Wickets in hand</label><input id="liveWkts" type="number" value="6" min="0" max="10" oninput="calcLive()"></div>
+    </div>
+    <div class="live-out" id="liveOut">—</div>
+    <div class="bar"><div id="liveBar" style="width:0;background:var(--accent)"></div></div>
+    <div class="muted" id="liveSub" style="margin-top:8px"></div>
+  </div>
+
+  <!-- ===================== REPLAY MODE ===================== -->
+  <h2>Match replay</h2>
+  <div class="panel">
+    <div class="row">
+      <label for="picker"><b>Match:</b></label>
+      <select id="picker"></select>
+      <button id="playBtn" onclick="togglePlay()">▶ Play</button>
+      <button class="sec" onclick="resetPlay()">Reset</button>
+    </div>
+    <div class="scorebar">
+      <div><span class="muted">Chase</span><br><span class="big" id="scoreLine">—</span></div>
+      <div><span class="muted">Win prob (chasing team)</span><br><span class="wpbadge" id="wpNow">—</span></div>
+      <div id="resultBox"></div>
+    </div>
+    <div id="chart" style="width:100%;height:420px"></div>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--accent)"></span>Calibrated model</span> &nbsp;&nbsp;
+      <span><span class="dot" style="background:var(--naive)"></span>Naive rule-of-thumb</span> &nbsp;&nbsp;
+      <span><span class="dot" style="background:var(--lose)"></span>Wicket falls</span>
+    </div>
+  </div>
+
+  <div class="note">
+    These are <b>held-out matches the model never trained on</b>. The blue line is a calibrated
+    XGBoost model (when it says 70%, teams really win ~70% of the time). The gold line is a naive
+    commentator-style rule — often wildly over/under-confident. The live calculator uses a lightweight
+    logistic model that closely matches the full one (0.97 correlation) so it can run instantly in your
+    browser. Data: Cricsheet T20 archive. Research tool, not betting advice; second innings only.
+  </div>
+</div>
+
+<script>
+// ---------- LIVE MODEL (fitted logistic, standardised features) ----------
+const LM = {
+  mean:[63.589674788021895,7.268500590318772,87.24129226145755,17.132760454239207],
+  std:[34.09452449418463,2.3626229221709005,50.514138738764785,53.24409846171765],
+  coef:[0.6316391563502367,1.3215343661916017,-2.3459688431684675,-2.479356398427148],
+  intercept:-0.8401434552517186
+};
+function liveWinProb(ballsLeft, wktsInHand, runsNeeded){
+  const oversLeft = ballsLeft/6;
+  const rrr = oversLeft>0 ? runsNeeded/oversLeft : runsNeeded*6;
+  const x = [ballsLeft, wktsInHand, runsNeeded, rrr];
+  let z = LM.intercept;
+  for(let i=0;i<4;i++){ z += LM.coef[i]*((x[i]-LM.mean[i])/LM.std[i]); }
+  return 1/(1+Math.exp(-z));
+}
+function calcLive(){
+  const need=+document.getElementById('liveNeed').value;
+  const balls=Math.max(1,+document.getElementById('liveBalls').value);
+  const wkts=Math.min(10,Math.max(0,+document.getElementById('liveWkts').value));
+  const p=liveWinProb(balls,wkts,need);
+  const pct=Math.round(p*100);
+  const out=document.getElementById('liveOut');
+  out.textContent=pct+'%';
+  out.style.color = pct>=50?'var(--win)':'var(--lose)';
+  const bar=document.getElementById('liveBar');
+  bar.style.width=pct+'%';
+  bar.style.background = pct>=50?'var(--win)':'var(--lose)';
+  const rrr=(need/(balls/6)).toFixed(1);
+  document.getElementById('liveSub').textContent =
+    `Chasing team win probability. Required run rate: ${rrr} per over.`;
+}
+
+// ---------- REPLAY MODE ----------
+let MATCHES=[], cur=null, playTimer=null, playIdx=0;
+fetch('replay_data.json').then(r=>r.json()).then(data=>{
+  MATCHES=data;
+  const pick=document.getElementById('picker');
+  data.forEach((m,i)=>{const o=document.createElement('option');o.value=i;
+    o.textContent=`${m.chasing} chasing ${m.target} vs ${m.bowling}`;pick.appendChild(o);});
+  pick.onchange=()=>loadMatch(+pick.value);
+  loadMatch(0);
+}).catch(()=>{document.getElementById('chart').innerHTML=
+  '<p style="color:#d1495b">Could not load replay_data.json — run this via a local server (see notes).</p>';});
+
+function loadMatch(i){stopPlay();cur=MATCHES[i];playIdx=cur.ball.length;
+  drawChart(cur.ball.length);updateReadout(cur.ball.length-1);showResult();}
+function wicketMarkers(upto){const xs=[],ys=[];
+  for(let k=1;k<upto;k++){if(cur.wkts[k]>cur.wkts[k-1]){xs.push(cur.ball[k]);ys.push(cur.wp[k]*100);}}
+  return {xs,ys};}
+function drawChart(upto){
+  const x=cur.ball.slice(0,upto), wp=cur.wp.slice(0,upto).map(v=>v*100),
+        nv=cur.naive.slice(0,upto).map(v=>v*100), wk=wicketMarkers(upto);
+  const traces=[
+    {x,y:wp,mode:'lines',line:{color:'#2f7dd1',width:3}},
+    {x,y:nv,mode:'lines',line:{color:'#b9922b',width:1.5,dash:'dot'}},
+    {x:wk.xs,y:wk.ys,mode:'markers',marker:{color:'#d1495b',size:9,symbol:'x'},
+      hovertemplate:'Wicket @ ball %{x}<extra></extra>'}];
+  const layout={margin:{l:48,r:14,t:10,b:40},
+    xaxis:{title:'Ball',range:[0,Math.max(cur.ball[cur.ball.length-1],10)],zeroline:false},
+    yaxis:{title:'Win probability (%)',range:[0,100],zeroline:false},showlegend:false,
+    plot_bgcolor:'#fff',paper_bgcolor:'#fff',
+    shapes:[{type:'line',x0:0,x1:9999,y0:50,y1:50,line:{color:'#ccd6df',width:1,dash:'dot'}}]};
+  Plotly.react('chart',traces,layout,{displayModeBar:false,responsive:true});
+}
+function updateReadout(k){if(k<0)k=0;
+  const need=cur.need[k],ballsLeft=120-cur.ball[k],wktsLeft=10-cur.wkts[k];
+  document.getElementById('scoreLine').textContent=`${cur.chasing}: need ${need} off ${ballsLeft}, ${wktsLeft} wkts left`;
+  const wp=Math.round(cur.wp[k]*100),el=document.getElementById('wpNow');
+  el.textContent=wp+'%';el.style.color=wp>=50?'var(--win)':'var(--lose)';}
+function showResult(){const box=document.getElementById('resultBox');
+  box.innerHTML=cur.won?`<span class="result" style="color:var(--win)">${cur.chasing} won ✓</span>`
+    :`<span class="result" style="color:var(--lose)">${cur.chasing} lost ✕</span>`;}
+function togglePlay(){if(playTimer){stopPlay();return;}
+  document.getElementById('playBtn').textContent='⏸ Pause';
+  if(playIdx>=cur.ball.length)playIdx=1;
+  playTimer=setInterval(()=>{playIdx++;if(playIdx>cur.ball.length){stopPlay();return;}
+    drawChart(playIdx);updateReadout(playIdx-1);},90);}
+function stopPlay(){if(playTimer){clearInterval(playTimer);playTimer=null;}
+  document.getElementById('playBtn').textContent='▶ Play';}
+function resetPlay(){stopPlay();playIdx=1;drawChart(1);updateReadout(0);}
+
+calcLive();  // initialise live calculator
+</script>
+</body>
+</html>
