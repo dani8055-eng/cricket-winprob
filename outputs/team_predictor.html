@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>T20 Pre-Match Predictor — Team vs Team</title>
+<style>
+  :root{--ink:#12303f;--a:#2f7dd1;--b:#d1495b;--win:#2fae66;}
+  *{box-sizing:border-box}
+  body{font-family:'Helvetica Neue',Arial,sans-serif;margin:0;background:#eef2f6;color:#1a2733;
+    padding:24px 16px;line-height:1.55}
+  .wrap{max-width:760px;margin:0 auto}
+  h1{margin:0 0 2px;color:var(--ink)}
+  .sub{color:#5a6b78;font-size:.9em;margin-bottom:18px}
+  .panel{background:#fff;border:1px solid #e2e8ee;border-radius:14px;padding:20px;margin-bottom:14px;
+    box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  .vs{display:flex;gap:14px;align-items:center;flex-wrap:wrap;justify-content:center}
+  select{font-size:1.05em;padding:10px 12px;border-radius:9px;border:1px solid #ccd6df;min-width:220px}
+  .vslbl{font-weight:800;color:#5a6b78}
+  .result{margin-top:22px;text-align:center}
+  .teamnames{font-size:1.25em;font-weight:700;margin-bottom:14px}
+  .split{display:flex;height:54px;border-radius:12px;overflow:hidden;box-shadow:inset 0 0 0 1px #e2e8ee}
+  .split .l{background:var(--a);display:flex;align-items:center;justify-content:flex-start;
+    padding-left:14px;color:#fff;font-weight:800;font-size:1.3em}
+  .split .r{background:var(--b);display:flex;align-items:center;justify-content:flex-end;
+    padding-right:14px;color:#fff;font-weight:800;font-size:1.3em}
+  .verdict{margin-top:14px;font-size:1.05em;color:var(--ink)}
+  .stats{display:flex;gap:30px;justify-content:center;margin-top:18px;flex-wrap:wrap;color:#5a6b78;font-size:.9em}
+  .stats .col{text-align:center}
+  .stats b{color:var(--ink);font-size:1.15em;display:block}
+  .note{color:#7a8894;font-size:.82em;margin-top:16px;line-height:1.6}
+  .warn{color:#b9922b;font-size:.85em;margin-top:8px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏏 T20 Pre-Match Predictor</h1>
+  <div class="sub">Pick two teams. The model estimates who's favoured, using each team's
+    recent form and record — before a ball is bowled.</div>
+
+  <div class="panel">
+    <div class="vs">
+      <select id="teamA"></select>
+      <span class="vslbl">vs</span>
+      <select id="teamB"></select>
+    </div>
+
+    <div class="result" id="result" style="display:none">
+      <div class="teamnames" id="names"></div>
+      <div class="split">
+        <div class="l" id="barA">—</div>
+        <div class="r" id="barB">—</div>
+      </div>
+      <div class="verdict" id="verdict"></div>
+      <div class="stats" id="stats"></div>
+      <div class="warn" id="warn"></div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>How it works:</b> the model learned from ~5,400 past T20s which pre-match signals
+    (recent form, career win rate, experience) predict the winner. On unseen later matches
+    it is right about <b>67–70% of the time</b> — well above a coin flip, but far from certain,
+    because T20 is a genuinely high-variance format. So this is a <i>probability</i>, not a
+    prediction of certainty. Team form is frozen at the end of the dataset (not live). The
+    live tool uses robust team-strength features (head-to-head is excluded, as it's data-thin).
+    Data: Cricsheet. Research tool, not betting advice.
+  </div>
+</div>
+
+<script>
+let M = null;
+fetch('team_predictor.json').then(r=>r.json()).then(d=>{
+  M = d;
+  const teams = Object.keys(d.teams).sort();
+  const a=document.getElementById('teamA'), b=document.getElementById('teamB');
+  teams.forEach(t=>{
+    a.appendChild(new Option(t,t));
+    b.appendChild(new Option(t,t));
+  });
+  // sensible defaults
+  a.value = teams.includes('India')?'India':teams[0];
+  b.value = teams.includes('Australia')?'Australia':teams[1];
+  a.onchange=predict; b.onchange=predict;
+  predict();
+}).catch(()=>{document.getElementById('result').innerHTML=
+  '<p style="color:#d1495b">Could not load team_predictor.json — run via a local server.</p>';
+  document.getElementById('result').style.display='block';});
+
+function winProb(A, B){
+  // build the feature vector in the SAME order as M.features (team1=A, team2=B)
+  const f = {
+    team1_winrate:A.winrate, team2_winrate:B.winrate,
+    team1_form5:A.form5, team2_form5:B.form5,
+    team1_form10:A.form10, team2_form10:B.form10,
+    team1_matches:A.matches, team2_matches:B.matches,
+    venue_team1_wr:A.winrate  // no neutral-venue info in this simple tool; use career rate as proxy
+  };
+  let z = M.intercept;
+  M.features.forEach((name,i)=>{
+    z += M.coef[i]*((f[name]-M.mean[i])/M.std[i]);
+  });
+  return 1/(1+Math.exp(-z)); // prob that team1 (A) wins
+}
+
+function predict(){
+  const an=document.getElementById('teamA').value, bn=document.getElementById('teamB').value;
+  const res=document.getElementById('result'); res.style.display='block';
+  if(an===bn){ document.getElementById('names').textContent='Pick two different teams';
+    document.getElementById('barA').style.width='50%'; document.getElementById('barB').style.width='50%';
+    document.getElementById('barA').textContent=''; document.getElementById('barB').textContent='';
+    document.getElementById('verdict').textContent=''; document.getElementById('stats').innerHTML='';
+    document.getElementById('warn').textContent=''; return; }
+  const A=M.teams[an], B=M.teams[bn];
+  const pA=winProb(A,B), pctA=Math.round(pA*100), pctB=100-pctA;
+
+  document.getElementById('names').textContent=`${an} vs ${bn}`;
+  const barA=document.getElementById('barA'), barB=document.getElementById('barB');
+  barA.style.width=pctA+'%'; barB.style.width=pctB+'%';
+  barA.textContent=pctA>=14?an.split(' ')[0]+' '+pctA+'%':pctA+'%';
+  barB.textContent=pctB>=14?bn.split(' ')[0]+' '+pctB+'%':pctB+'%';
+
+  const fav = pctA>=pctB?an:bn, favp=Math.max(pctA,pctB);
+  let strength = favp>=65?'strong favourite':favp>=57?'favoured':favp>=52?'slight edge':'near coin-flip';
+  document.getElementById('verdict').innerHTML =
+    favp<=52 ? `<b>Too close to call</b> — the model sees this as near 50/50.`
+             : `<b>${fav}</b> is the ${strength} (${favp}%).`;
+
+  document.getElementById('stats').innerHTML = `
+    <div class="col"><b>${(A.winrate*100).toFixed(0)}%</b>${an} career win rate</div>
+    <div class="col"><b>${(A.form10*100).toFixed(0)}%</b>${an} last-10 form</div>
+    <div class="col"><b>${(B.winrate*100).toFixed(0)}%</b>${bn} career win rate</div>
+    <div class="col"><b>${(B.form10*100).toFixed(0)}%</b>${bn} last-10 form</div>`;
+
+  const thin = (A.matches<25||B.matches<25);
+  document.getElementById('warn').textContent = thin
+    ? '⚠ One team has limited match history — treat this prediction with extra caution.' : '';
+}
+</script>
+</body>
+</html>
